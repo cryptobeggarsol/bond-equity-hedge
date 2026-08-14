@@ -43,7 +43,7 @@ st.title("📊 Sermaye Yapısı Arbitrajı & Backtest Platformu")
 st.caption("Vestel Elektronik (VESTL) Hisse / Eurobond Arbitraj Modeli ve Tarihsel Test Motoru")
 st.markdown("---")
 
-# Tablar (Sekmeler) Eklendi
+# Tablar
 tab1, tab2 = st.tabs(["🔮 Canlı Simülasyon & Greekler", "📜 Tarihsel Backtest (1 Yıllık)"])
 
 # ==========================================
@@ -125,38 +125,39 @@ with tab1:
 with tab2:
     st.subheader("📜 1 Yıllık Tarihsel Performans Backtesti (Long Bond + Short Equity)")
     
-    # Tarihsel Hisse Verisi Çekme (Yahoo Finance)
     @st.cache_data(ttl=3600)
     def load_backtest_data():
-        df_hisse = yf.download("VESTL.IS", period="1y")["Close"]
-        df_fx = yf.download("USDTRY=X", period="1y")["Close"]
+        # Verileri güvenli şekilde çekiyoruz
+        df_hisse = yf.download("VESTL.IS", period="1y", progress=False)
+        df_fx = yf.download("USDTRY=X", period="1y", progress=False)
         
-        df = pd.DataFrame({"VESTL": df_hisse, "USDTRY": df_fx}).dropna()
+        # Sadece Close kolonunu alıp Series yapılarına oturtuyoruz
+        close_hisse = df_hisse['Close'].squeeze()
+        close_fx = df_fx['Close'].squeeze()
         
-        # Sentetik Tahvil Fiyatı ve Kupon Birikimi
-        # (Eurobond fiyatı kredi riskine ve kura paralel simüle edilir + Kupon Taşımaları)
-        initial_fx = df["USDTRY"].iloc[0]
-        initial_hisse = df["VESTL"].iloc[0]
+        # Ortak tarih dizininde birleştiriyoruz
+        df = pd.DataFrame({"VESTL": close_hisse, "USDTRY": close_fx}).dropna()
         
-        # Arbitraj Portföy Değeri Hesaplama
-        # Başlangıç Kapitali: $1,000 USD Tahvil + Delta oranında Short Hisse
+        initial_fx = float(df["USDTRY"].iloc[0])
+        initial_hisse = float(df["VESTL"].iloc[0])
+        
+        # $1,000 başlangıç bütçesi için Short Hisse Adedi
         short_shares_backtest = (1000 * ampirik_delta * initial_fx) / initial_hisse
         
         portfolio_val = []
         for i in range(len(df)):
-            h_price = df["VESTL"].iloc[i]
-            fx_price = df["USDTRY"].iloc[i]
+            h_price = float(df["VESTL"].iloc[i])
+            fx_price = float(df["USDTRY"].iloc[i])
             
-            # Short hisse zararı/kârı (USD bazında)
+            # Short hisse PnL ($)
             short_pnl_usd = (initial_hisse - h_price) * short_shares_backtest / fx_price
             
-            # Tahvil Kupon Carry Getirisi (Günlük biriken kupon %9.75)
+            # Kupon birikimi (%9.75 Kupon)
             coupon_carry_usd = (1000 * 0.0975) * (i / 252.0)
             
-            # Tahvil Fiyat Değişim Yaklaşımı (Kredi ve kur hedge dengesi)
-            bond_val_usd = 885 + (fx_price - initial_fx) * 2 + coupon_carry_usd
+            # Sentetik Eurobond Fiyatı
+            bond_val_usd = 885 + (fx_price - initial_fx) * 1.5 + coupon_carry_usd
             
-            # Toplam Portföy Değeri ($)
             total_val = bond_val_usd + short_pnl_usd
             portfolio_val.append(total_val)
             
@@ -167,17 +168,15 @@ with tab2:
     try:
         df_bt = load_backtest_data()
         
-        # Metrikler
         baslangic_val = df_bt["Portfolio_USD"].iloc[0]
         bitis_val = df_bt["Portfolio_USD"].iloc[-1]
         toplam_getiri_pct = ((bitis_val - baslangic_val) / baslangic_val) * 100
         
-        # Sadece Hisse Tutulsaydı (Benchmark)
         bench_getiri_pct = ((df_bt["Benchmark_Hisse_USD"].iloc[-1] - 1000) / 1000) * 100
 
         col_b1, col_b2, col_b3 = st.columns(3)
         with col_b1:
-            st.metric("Arbitraj Stratejisi Toplam Getiri (USD)", f"%{toplam_getiri_pct:.2f}", delta=f"%{toplam_getiri_pct:.2f}")
+            st.metric("Arbitraj Stratejisi Getirisi (USD)", f"%{toplam_getiri_pct:.2f}", delta=f"%{toplam_getiri_pct:.2f}")
         with col_b2:
             st.metric("Sadece Hisse Tutma Getirisi (USD)", f"%{bench_getiri_pct:.2f}", delta=f"%{bench_getiri_pct:.2f}")
         with col_b3:
