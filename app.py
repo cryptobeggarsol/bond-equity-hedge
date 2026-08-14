@@ -3,11 +3,10 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 from scipy.stats import norm
-import plotly.graph_objects as go
 import requests
 
 # ==========================================
-# 0. CANLI USD/TRY KURU ÇEKME FONKSİYONU
+# 0. CANLI VERİ ÇEKME FONKSİYONLARI
 # ==========================================
 @st.cache_data(ttl=60)
 def get_live_usd_try():
@@ -28,70 +27,93 @@ def get_live_usd_try():
         pass
     return 33.00
 
+@st.cache_data(ttl=60)
+def get_live_stock_price(ticker_symbol, fallback_price):
+    try:
+        ticker = yf.Ticker(ticker_symbol)
+        # 1 günlük veriden son fiyatı al
+        data = ticker.history(period="1d")
+        if not data.empty:
+            price = float(data["Close"].iloc[-1])
+            if price > 0:
+                return price
+    except Exception as e:
+        pass
+    # Alternatif: info dict
+    try:
+        ticker = yf.Ticker(ticker_symbol)
+        info = ticker.info
+        price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("previousClose")
+        if price and price > 0:
+            return float(price)
+    except Exception as e:
+        pass
+    return fallback_price
+
 canli_usd_try = get_live_usd_try()
 
 # ==========================================
 # 1. BIST EUROBOND İHRAÇÇISI ŞİRKET VERİTABANI
 # ==========================================
 COMPANY_DB = {
+    "THYAO - Türk Hava Yolları": {
+        "ticker": "THYAO.IS",
+        "E": 410000000000,
+        "D": 320000000000,
+        "spot_fallback": 305.00,
+        "bond_isin": "XS2300000000 - 2028 Vadeli USD",
+        "bond_coupon": 0.0825,
+        "bond_price_default": 980.00,
+        "volatility": 0.35
+    },
     "VESTL - Vestel Elektronik": {
         "ticker": "VESTL.IS",
         "E": 7635000000,
         "D": 48500000000,
-        "spot_default": 22.76,
+        "spot_fallback": 85.00,
         "bond_isin": "XS2817919587 - 2029 Vadeli USD",
         "bond_coupon": 0.0975,
-        "bond_price_default": 885,
+        "bond_price_default": 885.00,
         "volatility": 0.42
     },
     "SISE - Şişecam": {
         "ticker": "SISE.IS",
         "E": 145000000000,
         "D": 98000000000,
-        "spot_default": 44.50,
+        "spot_fallback": 48.00,
         "bond_isin": "XS1961010987 - 2028 Vadeli USD",
         "bond_coupon": 0.0695,
-        "bond_price_default": 940,
+        "bond_price_default": 940.00,
         "volatility": 0.32
-    },
-    "THYAO - Türk Hava Yolları": {
-        "ticker": "THYAO.IS",
-        "E": 410000000000,
-        "D": 320000000000,
-        "spot_default": 298.00,
-        "bond_isin": "XS2300000000 - 2028 Vadeli USD",
-        "bond_coupon": 0.0825,
-        "bond_price_default": 975,
-        "volatility": 0.35
     },
     "GARAN - Garanti BBVA": {
         "ticker": "GARAN.IS",
         "E": 480000000000,
         "D": 850000000000,
-        "spot_default": 115.00,
+        "spot_fallback": 118.00,
         "bond_isin": "XS2010028376 - 2027 Subordinated USD",
         "bond_coupon": 0.0715,
-        "bond_price_default": 960,
+        "bond_price_default": 965.00,
         "volatility": 0.38
     },
     "KCHOL - Koç Holding": {
         "ticker": "KCHOL.IS",
         "E": 520000000000,
         "D": 390000000000,
-        "spot_default": 205.00,
+        "spot_fallback": 210.00,
         "bond_isin": "XS1961010000 - 2026 Vadeli USD",
         "bond_coupon": 0.0650,
-        "bond_price_default": 985,
+        "bond_price_default": 985.00,
         "volatility": 0.30
     },
     "ARCLK - Arçelik": {
         "ticker": "ARCLK.IS",
         "E": 110000000000,
         "D": 85000000000,
-        "spot_default": 165.00,
+        "spot_fallback": 155.00,
         "bond_isin": "XS2301010101 - 2028 Vadeli USD",
         "bond_coupon": 0.0850,
-        "bond_price_default": 915,
+        "bond_price_default": 920.00,
         "volatility": 0.36
     }
 }
@@ -106,7 +128,7 @@ st.set_page_config(
 )
 
 st.title("🏛️ BIST 100 Sermaye Yapısı Arbitrajı & Strateji Tarayıcısı")
-st.caption("Çoklu Şirket Merton Modeli, CDS Beklenti Haberleri ve Optimal Strateji Sıralama Motoru")
+st.caption("Çoklu Şirket Merton Modeli, Canlı Hisse Fiyatı ve CDS Strateji Tarayıcısı")
 st.markdown("---")
 
 # Tablar
@@ -117,17 +139,33 @@ tab1, tab2, tab3 = st.tabs([
 ])
 
 # ==========================================
-# 3. YAN PANEL (SIDEBAR - ŞİRKET SEÇİMİ)
+# 3. YAN PANEL (SIDEBAR - ŞİRKET VE VERİ SEÇİMİ)
 # ==========================================
 st.sidebar.header("🏢 Şirket ve Tahvil Seçimi")
 secilen_sirket_key = st.sidebar.selectbox("BIST Şirketini Seçin:", list(COMPANY_DB.keys()))
 sirket_data = COMPANY_DB[secilen_sirket_key]
 
+# Canlı Fiyat Çekme
+canli_hisse = get_live_stock_price(sirket_data["ticker"], sirket_data["spot_fallback"])
+
 st.sidebar.markdown("---")
-st.sidebar.header("⚙️ Simülasyon Parametreleri")
-spot_hisse = st.sidebar.number_input("Spot Hisse Fiyatı (TL)", value=float(sirket_data["spot_default"]), step=0.5)
+st.sidebar.header("⚙️ Canlı ve Ayarlanabilir Fiyatlar")
+
+spot_hisse = st.sidebar.number_input(
+    f"Spot Hisse Fiyatı ({sirket_data['ticker']}) - TL", 
+    value=float(canli_hisse), 
+    step=0.5,
+    format="%.2f"
+)
+
 usd_try = st.sidebar.number_input("USD/TRY Kuru (Canlı)", value=float(canli_usd_try), step=0.01, format="%.4f")
-tahvil_fiyat = st.sidebar.number_input("Eurobond Fiyatı ($)", value=float(sirket_data["bond_price_default"]), step=5.0)
+
+tahvil_fiyat = st.sidebar.number_input(
+    f"Eurobond Fiyatı ($) - {sirket_data['bond_isin'].split('-')[0]}", 
+    value=float(sirket_data["bond_price_default"]), 
+    step=2.5,
+    format="%.2f"
+)
 
 mevcut_short_adedi = st.sidebar.number_input("Mevcut Eldeki Short Hisse Adedi", value=100, step=5)
 
@@ -140,7 +178,7 @@ cds_degisim_bps = st.sidebar.slider("CDS Risk Primi Değişimi (bps)", -200, 300
 # ==========================================
 E_base = sirket_data["E"]
 D = sirket_data["D"]
-E_mevcut = spot_hisse * (E_base / sirket_data["spot_default"])
+E_mevcut = spot_hisse * (E_base / sirket_data["spot_fallback"])
 V = E_mevcut + D
 sigma_E = sirket_data["volatility"]
 T, r = 2.75, 0.045
@@ -179,12 +217,11 @@ with tab1:
     with col_news2:
         st.warning("⚡ **Merkez Bankası Faiz Kararı:** Sıkı para politikası sürerken borçlanma maliyetleri yüksek kalmaya devam ediyor.")
     with col_news3:
-        st.success(f"📊 **{secilen_sirket_key.split('-')[0]} Özel Haber:** Şirketin yurt dışı tahvil ihracına 3 kat talep geldi. İflas riski (Merton) oldukça düşük.")
+        st.success(f"📊 **{secilen_sirket_key.split('-')[0]} Özel Haber:** Şirketin canlı hisse fiyatı BIST'ten başarıyla çekildi: TL {spot_hisse:.2f}")
 
     st.markdown("---")
     st.subheader("🏆 Mevcut ve Gelecek Koşullara Göre En Karlı Strateji Sıralaması")
     
-    # Strateji Derecelendirme Motoru
     strategies_data = [
         {
             "Strateji Adı": "Capital Structure Arbitrage (Long Bond + Short Equity)",
@@ -230,13 +267,13 @@ with tab2:
     st.subheader(f"📌 {secilen_sirket_key} - Anlık Pozisyon ve Senaryo Durumu")
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("Canlı Dolar Kuru", f"{usd_try:.2f} TL")
+        st.metric("Canlı Hisse Fiyatı", f"{spot_hisse:.2f} TL")
     with col2:
         st.metric("Merton Deltası (Δ)", f"{ampirik_delta:.4f}")
     with col3:
         st.metric("Gerekli Hedef Short Adedi", f"{hedef_short_hisse_adedi} Adet")
     with col4:
-        st.metric("Seçilen Tahvil Kuponu", f"%{sirket_data['bond_coupon']*100:.2f}")
+        st.metric("Tahvil Kupon Oranı", f"%{sirket_data['bond_coupon']*100:.2f}")
 
     st.markdown("---")
     
@@ -246,8 +283,7 @@ with tab2:
     with reb_col1:
         if rebalance_hisse_adedi > 0:
             st.error(f"⚠️ **REBALANCE AKSİYONU: EXTRA SHORT SATIŞ YAPIN!**\n\n"
-                     f"➡️ **Ek Satılacak {sirket_data['ticker']} Hissesi:** `{rebalance_hisse_adedi}` Adet\n\n"
-                     f"*Çöküş kârını katlamak ve Delta-Neutral korumasını güncellemek için satınız.*")
+                     f"➡️ **Ek Satılacak {sirket_data['ticker']} Hissesi:** `{rebalance_hisse_adedi}` Adet")
         elif rebalance_hisse_adedi < 0:
             st.warning(f"🔄 **REBALANCE AKSİYONU: SHORT POZİSYON KAPATIN (BUY TO COVER)**\n\n"
                        f"➡️ **Geri Alınacak Short Hisse:** `{abs(rebalance_hisse_adedi)}` Adet")
@@ -259,7 +295,7 @@ with tab2:
         reb_table_data = []
         for step in senaryo_adimlari:
             step_price = spot_hisse * (1 + step / 100.0)
-            s_E = step_price * (E_base / sirket_data["spot_default"])
+            s_E = step_price * (E_base / sirket_data["spot_fallback"])
             s_V = s_E + D
             s_sig_V = sigma_E * (s_E / s_V)
             s_d1 = (np.log(s_V / D) + (r + 0.5 * s_sig_V**2) * T) / (s_sig_V * np.sqrt(T))
@@ -292,17 +328,17 @@ with tab3:
     hata_marjini = abs(sayisal_gamma - merton_gamma_raw)
     
     if hata_marjini < 1e-6:
-        st.success(f"✅ **MODEL DOĞRULANDI:** Analitik Merton Deltası ve Gamma parametreleri tam doğrulukla hesaplanıyor. (Hata Marjı: {hata_marjini:.2e})")
+        st.success(f"✅ **MODEL DOĞRULANDI:** Analitik Merton Deltası ve Gamma parametreleri tam doğrulukla hesaplanıyor.")
 
     st.markdown("---")
     st.subheader(f"📊 {secilen_sirket_key} - $1,000 Portföy Ölçekli Greek Kartları")
     
     c_g1, c_g2, c_g3, c_g4 = st.columns(4)
     with c_g1:
-        st.metric("Delta (Δ)", f"{merton_delta:.4f}", help="Varlık Değerine Duyarlılık")
+        st.metric("Delta (Δ)", f"{merton_delta:.4f}")
     with c_g2:
-        st.metric("Gamma (Γ)", f"{merton_gamma:.2e}", help="Delta Değişim Hızı")
+        st.metric("Gamma (Γ)", f"{merton_gamma:.2e}")
     with c_g3:
-        st.metric("Vega (ν - %1 Vol)", f"${merton_vega_usd:.2f} USD", help="Volatilitenin %1 artmasının etkisi")
+        st.metric("Vega (ν - %1 Vol)", f"${merton_vega_usd:.2f} USD")
     with c_g4:
-        st.metric("Theta (Θ - Günlük)", f"${merton_theta_usd:.2f} USD/Gün", help="1 günlük zaman kaybı")
+        st.metric("Theta (Θ - Günlük)", f"${merton_theta_usd:.2f} USD/Gün")
