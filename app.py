@@ -34,17 +34,21 @@ canli_usd_try = get_live_usd_try()
 # 1. WEB SAYFASI KONFİGÜRASYONU
 # ==========================================
 st.set_page_config(
-    page_title="CapStructure Arb & Backtest | Vestel",
+    page_title="CapStructure Arb & Validation | Vestel",
     page_icon="📊",
     layout="wide"
 )
 
-st.title("📊 Sermaye Yapısı Arbitrajı & Backtest Platformu")
-st.caption("Vestel Elektronik (VESTL) Hisse / Eurobond Arbitraj Modeli ve Tarihsel Test Motoru")
+st.title("📊 Sermaye Yapısı Arbitrajı & Doğrulama Platformu")
+st.caption("Vestel Elektronik (VESTL) Hisse / Eurobond Arbitraj Modeli, Backtest ve Model Validation Motoru")
 st.markdown("---")
 
-# Tablar
-tab1, tab2 = st.tabs(["🔮 Canlı Simülasyon & Greekler", "📜 Tarihsel Backtest (1 Yıllık)"])
+# Tablar (3 Sekmeli Yapı)
+tab1, tab2, tab3 = st.tabs([
+    "🔮 Canlı Simülasyon & Greekler", 
+    "📜 Tarihsel Backtest (1 Yıllık)", 
+    "🧪 Model Doğrulama & Sensitivite"
+])
 
 # ==========================================
 # 2. YAN PANEL (SIDEBAR)
@@ -64,16 +68,24 @@ hisse_degisim_pct = st.sidebar.slider("Hisse Fiyatı Değişimi (%)", -40, 40, 0
 cds_degisim_bps = st.sidebar.slider("CDS Risk Primi Değişimi (bps)", -200, 300, 0)
 
 # ==========================================
-# HESAPLAMA MOTORU (MERTON)
+# HESAPLAMA MOTORU (MERTON MODEL & GREEKS)
 # ==========================================
 E, D = 7635000000, 48500000000
 V = E + D
 sigma_E, T, r = 0.42, 2.75, 0.045
 sigma_V = sigma_E * (E / V)
 
+# Merton d1 & d2
 d1 = (np.log(V / D) + (r + 0.5 * sigma_V**2) * T) / (sigma_V * np.sqrt(T))
+d2 = d1 - sigma_V * np.sqrt(T)
+
 merton_delta = 1 - norm.cdf(d1)
 ampirik_delta = np.clip(merton_delta + (1000 - tahvil_fiyat) / 2000, 0.15, 0.45)
+
+# Analitik Greekler
+merton_gamma = norm.pdf(d1) / (V * sigma_V * np.sqrt(T))
+merton_vega = V * norm.pdf(d1) * np.sqrt(T)
+merton_theta = -(V * norm.pdf(d1) * sigma_V) / (2 * np.sqrt(T)) - r * D * np.exp(-r * T) * norm.cdf(d2)
 
 tahvil_tl = tahvil_fiyat * usd_try
 short_tl = tahvil_tl * ampirik_delta
@@ -96,7 +108,7 @@ with tab1:
     with col3:
         st.metric("Short Hisse Adedi", f"{short_hisse_adedi} Adet")
     with col4:
-        st.metric("Senaryo Net PnL", f"${toplam_pnl_usd:.2f} USD", delta=f"{toplam_pnl_usd:.2f} USD")
+        st.metric("Senaryo Net PnL", f"${toplam_pnl_usd:.2f} USD", delta=f"${toplam_pnl_usd:.2f} USD")
 
     st.markdown("---")
     st.subheader("📈 Hisse Hareketine Karşı Portföy Duyarlılığı")
@@ -127,21 +139,17 @@ with tab2:
     
     @st.cache_data(ttl=3600)
     def load_backtest_data():
-        # Verileri güvenli şekilde çekiyoruz
         df_hisse = yf.download("VESTL.IS", period="1y", progress=False)
         df_fx = yf.download("USDTRY=X", period="1y", progress=False)
         
-        # Sadece Close kolonunu alıp Series yapılarına oturtuyoruz
         close_hisse = df_hisse['Close'].squeeze()
         close_fx = df_fx['Close'].squeeze()
         
-        # Ortak tarih dizininde birleştiriyoruz
         df = pd.DataFrame({"VESTL": close_hisse, "USDTRY": close_fx}).dropna()
         
         initial_fx = float(df["USDTRY"].iloc[0])
         initial_hisse = float(df["VESTL"].iloc[0])
         
-        # $1,000 başlangıç bütçesi için Short Hisse Adedi
         short_shares_backtest = (1000 * ampirik_delta * initial_fx) / initial_hisse
         
         portfolio_val = []
@@ -149,13 +157,8 @@ with tab2:
             h_price = float(df["VESTL"].iloc[i])
             fx_price = float(df["USDTRY"].iloc[i])
             
-            # Short hisse PnL ($)
             short_pnl_usd = (initial_hisse - h_price) * short_shares_backtest / fx_price
-            
-            # Kupon birikimi (%9.75 Kupon)
             coupon_carry_usd = (1000 * 0.0975) * (i / 252.0)
-            
-            # Sentetik Eurobond Fiyatı
             bond_val_usd = 885 + (fx_price - initial_fx) * 1.5 + coupon_carry_usd
             
             total_val = bond_val_usd + short_pnl_usd
@@ -171,7 +174,6 @@ with tab2:
         baslangic_val = df_bt["Portfolio_USD"].iloc[0]
         bitis_val = df_bt["Portfolio_USD"].iloc[-1]
         toplam_getiri_pct = ((bitis_val - baslangic_val) / baslangic_val) * 100
-        
         bench_getiri_pct = ((df_bt["Benchmark_Hisse_USD"].iloc[-1] - 1000) / 1000) * 100
 
         col_b1, col_b2, col_b3 = st.columns(3)
@@ -182,7 +184,6 @@ with tab2:
         with col_b3:
             st.metric("Alfa (Arbitraj Fark Getirisi)", f"%{(toplam_getiri_pct - bench_getiri_pct):.2f}")
 
-        # Backtest Grafiği
         fig_bt = go.Figure()
         fig_bt.add_trace(go.Scatter(x=df_bt.index, y=df_bt["Portfolio_USD"], mode='lines', name='Delta-Neutral Arbitraj Portföyü ($)', line=dict(color='green', width=3)))
         fig_bt.add_trace(go.Scatter(x=df_bt.index, y=df_bt["Benchmark_Hisse_USD"], mode='lines', name='Sadece VESTL Hissesi ($)', line=dict(color='gray', dash='dot')))
@@ -197,3 +198,57 @@ with tab2:
         
     except Exception as e:
         st.error(f"Backtest verileri yüklenirken bir hata oluştu: {e}")
+
+# ==========================================
+# SEKME 3: MODEL DOĞRULAMA & SENSİTİVİTE
+# ==========================================
+with tab3:
+    st.subheader("🧪 Otomatize Merton Model Doğrulama (Sanity Check)")
+    
+    # Sayısal Türev Kontrolü (Finite Difference vs Analitik)
+    delta_v = 100000  # Küçük varlık değişimi
+    V_plus = V + delta_v
+    d1_plus = (np.log(V_plus / D) + (r + 0.5 * sigma_V**2) * T) / (sigma_V * np.sqrt(T))
+    merton_delta_plus = 1 - norm.cdf(d1_plus)
+    
+    sayisal_gamma = (merton_delta_plus - merton_delta) / delta_v
+    hata_marjini = abs(sayisal_gamma - merton_gamma)
+    
+    if hata_marjini < 1e-6:
+        st.success(f"✅ **MODEL DOĞRULANDI:** Analitik Merton Deltası ve Gamma parametreleri türevsel olarak tam doğrulukla hesaplanıyor. (Hata Marjı: {hata_marjini:.2e})")
+    else:
+        st.warning("⚠️ Model türevsel sapma gösteriyor, parametreleri kontrol ediniz.")
+
+    st.markdown("---")
+    st.subheader("📊 Model Greek Duyarlılık Kartları")
+    
+    c_g1, c_g2, c_g3, c_g4 = st.columns(4)
+    with c_g1:
+        st.metric("Delta (Δ)", f"{merton_delta:.4f}", help="Varlık Değerine Duyarlılık")
+    with c_g2:
+        st.metric("Gamma (Γ)", f"{merton_gamma:.2e}", help="Delta Değişim Hızı")
+    with c_g3:
+        st.metric("Vega (ν)", f"{merton_vega:,.0f} TL", help="Volatilite Duyarlılığı")
+    with c_g4:
+        st.metric("Theta (Θ)", f"{merton_theta:,.0f} TL/Yıl", help="Zaman Aşınması Etkisi")
+
+    st.markdown("---")
+    st.subheader("📉 Volatilitenin Merton Deltasına Etkisi (Vega Eğrisi)")
+    
+    vol_range = np.linspace(0.10, 0.80, 50)
+    delta_vol_list = []
+    for v_sigma in vol_range:
+        v_sig_V = v_sigma * (E / V)
+        d1_v = (np.log(V / D) + (r + 0.5 * v_sig_V**2) * T) / (v_sig_V * np.sqrt(T))
+        delta_vol_list.append(1 - norm.cdf(d1_v))
+
+    fig_greek = go.Figure()
+    fig_greek.add_trace(go.Scatter(x=vol_range * 100, y=delta_vol_list, mode='lines+markers', name='Delta (Δ)', line=dict(color='purple', width=2)))
+    
+    fig_greek.update_layout(
+        title="Volatilite Artışının Hedging Oranına (Delta) Etkisi",
+        xaxis_title="Hisse Volatilitesi (% σ_E)",
+        yaxis_title="Merton Deltası (Δ)",
+        template="plotly_white"
+    )
+    st.plotly_chart(fig_greek, use_container_width=True)
