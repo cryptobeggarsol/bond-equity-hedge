@@ -68,7 +68,7 @@ hisse_degisim_pct = st.sidebar.slider("Hisse Fiyatı Değişimi (%)", -40, 40, 0
 cds_degisim_bps = st.sidebar.slider("CDS Risk Primi Değişimi (bps)", -200, 300, 0)
 
 # ==========================================
-# HESAPLAMA MOTORU (MERTON MODEL & GREEKS)
+# 3. HESAPLAMA MOTORU (MERTON MODEL & GREEKS)
 # ==========================================
 E, D = 7635000000, 48500000000
 V = E + D
@@ -82,10 +82,16 @@ d2 = d1 - sigma_V * np.sqrt(T)
 merton_delta = 1 - norm.cdf(d1)
 ampirik_delta = np.clip(merton_delta + (1000 - tahvil_fiyat) / 2000, 0.15, 0.45)
 
-# Analitik Greekler
-merton_gamma = norm.pdf(d1) / (V * sigma_V * np.sqrt(T))
-merton_vega = V * norm.pdf(d1) * np.sqrt(T)
-merton_theta = -(V * norm.pdf(d1) * sigma_V) / (2 * np.sqrt(T)) - r * D * np.exp(-r * T) * norm.cdf(d2)
+# Şirket Geneli Ham Greekler
+merton_gamma_raw = norm.pdf(d1) / (V * sigma_V * np.sqrt(T))
+merton_vega_raw = V * norm.pdf(d1) * np.sqrt(T)
+merton_theta_raw = -(V * norm.pdf(d1) * sigma_V) / (2 * np.sqrt(T)) - r * D * np.exp(-r * T) * norm.cdf(d2)
+
+# $1,000 Nominal Portföy Ölçeğine İndirgenmiş Anlamlı Greekler
+portfolio_scale = 1000 / V
+merton_gamma = merton_gamma_raw * (V**2) / 1000  # İkinci türev normalize ölçeği
+merton_vega_usd = (merton_vega_raw * portfolio_scale * 0.01) / (usd_try / 33.0)  # %1 (100bps) Vol Değişimi ($)
+merton_theta_usd = (merton_theta_raw * portfolio_scale / 365.0) / (usd_try / 33.0) # Daily Time Decay ($/Gün)
 
 tahvil_tl = tahvil_fiyat * usd_try
 short_tl = tahvil_tl * ampirik_delta
@@ -206,13 +212,13 @@ with tab3:
     st.subheader("🧪 Otomatize Merton Model Doğrulama (Sanity Check)")
     
     # Sayısal Türev Kontrolü (Finite Difference vs Analitik)
-    delta_v = 100000  # Küçük varlık değişimi
+    delta_v = 100000
     V_plus = V + delta_v
     d1_plus = (np.log(V_plus / D) + (r + 0.5 * sigma_V**2) * T) / (sigma_V * np.sqrt(T))
     merton_delta_plus = 1 - norm.cdf(d1_plus)
     
     sayisal_gamma = (merton_delta_plus - merton_delta) / delta_v
-    hata_marjini = abs(sayisal_gamma - merton_gamma)
+    hata_marjini = abs(sayisal_gamma - merton_gamma_raw)
     
     if hata_marjini < 1e-6:
         st.success(f"✅ **MODEL DOĞRULANDI:** Analitik Merton Deltası ve Gamma parametreleri türevsel olarak tam doğrulukla hesaplanıyor. (Hata Marjı: {hata_marjini:.2e})")
@@ -220,7 +226,7 @@ with tab3:
         st.warning("⚠️ Model türevsel sapma gösteriyor, parametreleri kontrol ediniz.")
 
     st.markdown("---")
-    st.subheader("📊 Model Greek Duyarlılık Kartları")
+    st.subheader("📊 Portföy Ölçeğinde ($1,000 Büyüklük) Greek Kartları")
     
     c_g1, c_g2, c_g3, c_g4 = st.columns(4)
     with c_g1:
@@ -228,9 +234,9 @@ with tab3:
     with c_g2:
         st.metric("Gamma (Γ)", f"{merton_gamma:.2e}", help="Delta Değişim Hızı")
     with c_g3:
-        st.metric("Vega (ν)", f"{merton_vega:,.0f} TL", help="Volatilite Duyarlılığı")
+        st.metric("Vega (ν - %1 Vol)", f"${merton_vega_usd:.2f} USD", help="Volatilitenin %1 (100bps) artmasının $1,000 portföye etkisi")
     with c_g4:
-        st.metric("Theta (Θ)", f"{merton_theta:,.0f} TL/Yıl", help="Zaman Aşınması Etkisi")
+        st.metric("Theta (Θ - Günlük)", f"${merton_theta_usd:.2f} USD/Gün", help="1 günlük zaman aşınmasının $1,000 portföye etkisi")
 
     st.markdown("---")
     st.subheader("📉 Volatilitenin Merton Deltasına Etkisi (Vega Eğrisi)")
