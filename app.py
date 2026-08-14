@@ -4,9 +4,40 @@ import pandas as pd
 import numpy as np
 from scipy.stats import norm
 import plotly.graph_objects as go
+import requests
 
 # ==========================================
-# 1. WEB SAYFASI KONFİGÜRASYONU (FRONTEND TASARIM)
+# 0. CANLI USD/TRY KURU ÇEKME FONKSİYONU
+# ==========================================
+@st.cache_data(ttl=60)  # Her 60 saniyede bir kuru otomatik günceller
+def get_live_usd_try():
+    # 1. Yöntem: Ücretsiz Open ExchangeRate API (API Key Gerektirmez)
+    try:
+        url = "https://open.er-api.com/v6/latest/USD"
+        response = requests.get(url, timeout=3)
+        data = response.json()
+        if data.get("result") == "success":
+            return float(data["rates"]["TRY"])
+    except:
+        pass
+
+    # 2. Yöntem: Yahoo Finance USDTRY=X
+    try:
+        ticker = yf.Ticker("USDTRY=X")
+        data = ticker.history(period="1d")
+        if not data.empty:
+            return float(data["Close"].iloc[-1])
+    except:
+        pass
+
+    # İki servis de yanıt vermezse güvenlik için varsayılan değer
+    return 33.00
+
+# Canlı Kuru Çek
+canli_usd_try = get_live_usd_try()
+
+# ==========================================
+# 1. WEB SAYFASI KONFİGÜRASYONU (FRONTEND)
 # ==========================================
 st.set_page_config(
     page_title="CapStructure Arb | Vestel Simülatörü",
@@ -23,9 +54,16 @@ st.markdown("---")
 # ==========================================
 st.sidebar.header("⚙️ Simülasyon Parametreleri")
 
-# A. Hisse ve Kur Girdileri
+# A. Hisse ve Canlı Kur Girdileri
 spot_hisse = st.sidebar.number_input("VESTL Spot Hisse Fiyatı (TL)", value=22.76, step=0.1)
-usd_try = st.sidebar.number_input("USD/TRY Kuru", value=33.00, step=0.5)
+
+# CANLI KUR BURADA OTOMATİK DOLDURULUYOR
+usd_try = st.sidebar.number_input(
+    "USD/TRY Kuru (Canlı Çekildi)", 
+    value=float(canli_usd_try), 
+    step=0.01,
+    format="%.4f"
+)
 
 # B. Tahvil Seçimi
 tahvil_secimi = st.sidebar.selectbox(
@@ -73,7 +111,7 @@ toplam_pnl_usd = hisse_pnl_usd + tahvil_pnl_usd
 col1, col2, col3, col4 = st.columns(4)
 
 with col1:
-    st.metric("Seçilen Tahvil Fiyatı", f"${tahvil_fiyat}")
+    st.metric("Canlı Dolar Kuru", f"{usd_try:.2f} TL")
 with col2:
     st.metric("Merton Deltası (Δ)", f"{ampirik_delta:.4f}")
 with col3:
@@ -90,7 +128,7 @@ st.subheader("📈 Hisse Hareketine Karşı Portföy Duyarlılığı")
 
 hisse_range = np.linspace(spot_hisse * 0.6, spot_hisse * 1.4, 50)
 hisse_pnl_list = [(spot_hisse - h) * short_hisse_adedi / usd_try for h in hisse_range]
-tahvil_pnl_list = [(h - spot_hisse) * ampirik_delta * 10 for h in hisse_range]  # Koruma etkisi
+tahvil_pnl_list = [(h - spot_hisse) * ampirik_delta * 10 for h in hisse_range]
 net_pnl_list = [h + t for h, t in zip(hisse_pnl_list, tahvil_pnl_list)]
 
 fig = go.Figure()
@@ -99,7 +137,7 @@ fig.add_trace(go.Scatter(x=hisse_range, y=tahvil_pnl_list, mode='lines', name='L
 fig.add_trace(go.Scatter(x=hisse_range, y=net_pnl_list, mode='lines', name='Net Delta-Neutral PnL', line=dict(color='green', width=3)))
 
 fig.update_layout(
-    title="Hisse Fiyat Değişiminin Net Portföy Değerine Etkisi (Delta Neutral Koruma)",
+    title=f"Hisse Fiyat Değişiminin Net Portföy Değerine Etkisi (Güncel Kur: {usd_try:.2f} TL)",
     xaxis_title="VESTL Hisse Fiyatı (TL)",
     yaxis_title="PnL (USD)",
     template="plotly_white"
